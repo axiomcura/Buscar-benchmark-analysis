@@ -1,0 +1,19 @@
+[project]
+name = "buscar-benchmark-analysis"
+version = "0.1.0"
+description = "Analysis of Buscar benchmark datasets"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "polars>=1.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.26.0",
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    "scipy>=1.12.0",
+    "pyyaml>=6.0.1",
+    "ipykernel>=6.29.0",
+]
+
+[tool.uv]
+managed = true
