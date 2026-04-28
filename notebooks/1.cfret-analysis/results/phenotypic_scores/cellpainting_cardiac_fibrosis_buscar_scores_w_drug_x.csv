@@ -1,6 +1,0 @@
-target,perturbation,on_buscar_scores,off_buscar_scores,is_reference_distance
-healthy_DMSO,failing_TGFRi,0.9041956574764504,0.2647058823529412,false
-healthy_DMSO,failing_DMSO,1.0,0.0,true
-healthy_DMSO,healthy_TGFRi,0.6814265756839505,0.14705882352941177,false
-healthy_DMSO,failing_drug_x,0.9265635163624798,0.5,false
-healthy_DMSO,healthy_drug_x,0.8893909565466687,0.6470588235294118,false
