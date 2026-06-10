@@ -27,9 +27,13 @@ from tqdm.auto import tqdm
 from utils.io_utils import load_sc_profiles
 
 # adding buscar src to path for importing buscar functions
-sys.path.append("../../buscar/src/")
+sys.path.insert(0, "../../buscar/src/")
 from buscar.metrics import calculate_buscar_scores
-from buscar.signatures import identify_signatures as get_signatures
+from buscar.signatures import identify_signatures
+
+# ## Helper functions
+#
+#
 
 # ## Setting Paths and Loading Data
 #
@@ -135,12 +139,9 @@ def find_top_treatments(
     if missing_cols:
         raise ValueError(f"Missing required columns: {sorted(missing_cols)}")
 
-    # exclude randomly paired perturbations (null baseline used in replicate analysis)
-    filtered_df = replicate_buscar_scores_df.filter(~pl.col("random_perturbations"))
-
     # rank treatments by mean distance from ideal score (1.0), then by variance
     ranked_df = (
-        filtered_df.group_by("perturbation")
+        replicate_buscar_scores_df.group_by("perturbation")
         .agg(
             pl.col("on_score").mean().alias("mean_on_score"),
             pl.col("on_score").median().alias("median_on_score"),
@@ -199,9 +200,11 @@ a549_unique_plates = cpjump1_a549_df["Metadata_Plate"].unique().to_list()
 # In[ ]:
 
 
-# titration analysis for top treatments
+# setting random seed for reproducibility
 np.random.seed(rng_seed)
 
+# mapping of cell types to their profiles and top treatments for titration
+# analysis
 profiles_by_cell_type = {
     "U2OS": cpjump1_u2os_df,
     "A549": cpjump1_a549_df,
@@ -211,12 +214,16 @@ top_treatments_by_cell_type = {
     "A549": a549_top_treatments,
 }
 
+# defining the metadata columns to include in the Buscar scoring dataframe, which
+# will be used to label the reference vs titrated groups for scoring
 meta_cols_with_titration_label = cpjump1_meta_feats + ["_titration_label"]
 titration_scores = []
 checkpoint_path = (
     titration_results_dir / "_cpjump1_compound_titration_scores_checkpoint.jsonl"
 )
 
+# iterate through each cell type and its corresponding top treatments to perform
+# the titration analysis
 for cell_type, selected_treatments in top_treatments_by_cell_type.items():
     profiles = profiles_by_cell_type[cell_type]
 
@@ -285,7 +292,7 @@ for cell_type, selected_treatments in top_treatments_by_cell_type.items():
 
                 try:
                     # derive on/off morphological signatures from the reference plate
-                    on_sig, off_sig, _ = get_signatures(
+                    on_sig, off_sig, _ = identify_signatures(
                         ref_profiles=ref_negcon.select(cpjump1_feats),
                         target_profiles=ref_perturbation_cells.select(cpjump1_feats),
                         morph_feats=cpjump1_feats,
