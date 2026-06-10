@@ -214,7 +214,7 @@ top_treatments_by_cell_type = {
 meta_cols_with_titration_label = cpjump1_meta_feats + ["_titration_label"]
 titration_scores = []
 checkpoint_path = (
-    titration_results_dir / "cpjump1_compound_titration_scores_checkpoint.jsonl"
+    titration_results_dir / "_cpjump1_compound_titration_scores_checkpoint.jsonl"
 )
 
 for cell_type, selected_treatments in top_treatments_by_cell_type.items():
