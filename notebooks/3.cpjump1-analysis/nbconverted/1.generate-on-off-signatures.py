@@ -22,7 +22,6 @@ import tqdm
 # add buscar function
 sys.path.append("../../")
 from buscar.signatures import get_signatures
-
 from utils.data_utils import generate_consensus_signatures
 from utils.io_utils import load_configs, load_profiles
 

@@ -20,7 +20,6 @@ from tqdm.auto import tqdm
 sys.path.append("../../")
 from buscar.metrics import calculate_buscar_scores
 from buscar.signatures import get_signatures
-
 from utils.data_utils import split_meta_and_features
 
 # Setting input and out paths
