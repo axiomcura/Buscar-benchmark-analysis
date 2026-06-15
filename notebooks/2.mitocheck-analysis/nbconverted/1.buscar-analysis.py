@@ -30,7 +30,6 @@ from tqdm import tqdm
 sys.path.append("../../")
 from buscar.metrics import calculate_buscar_scores
 from buscar.signatures import get_signatures
-
 from utils.data_utils import shuffle_feature_profiles
 from utils.io_utils import load_configs, load_profiles
 

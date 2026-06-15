@@ -39,7 +39,7 @@ from buscar.signatures import identify_signatures
 #
 # Here we load the replicate consistency scores for U2OS and A549 cells from the CPJUMP1 compound dataset, along with the single-cell morphological profiles.
 
-# In[ ]:
+# In[2]:
 
 
 # setting module results dir
@@ -52,7 +52,7 @@ titration_results_dir.mkdir(parents=True, exist_ok=True)
 
 # Load the replicate consistency scores (used to identify candidate treatments) and the CPJUMP1 single-cell morphological profiles.
 
-# In[ ]:
+# In[3]:
 
 
 # loading in the replicate consistency data
@@ -71,7 +71,7 @@ cpjump1_meta_feats, cpjump1_feats, cpjump1_compound_df = load_sc_profiles(
 
 # Preprocess the data for titration analysis: remove randomly paired perturbations (used as the null baseline in replicate scoring), then subset the CPJUMP1 profiles to retain only negative controls and compound-treated cells, dropping any other control types.
 
-# In[ ]:
+# In[4]:
 
 
 # Remove randomly paired perturbations from the replicate score dataframes
@@ -109,9 +109,9 @@ if cpjump1_a549_df.is_empty():
 #
 # We select treatments that showed consistently high on-Buscar scores in the replicate analysis — indicating a strong, reproducible morphological signal. These treatments serve as ideal stress-test candidates because a clear signal makes it easier to detect when score stability begins to break down.
 #
-# Treatments are ranked by their mean absolute distance from the ideal on-Buscar score of 1.0, with ties broken by score variance. We select the top 3 treatments per cell line.
+# Treatments are ranked by a consistency score that combines their mean absolute distance from the ideal on-Buscar score of 1.0 with variance normalized by that error. This keeps treatments close to 1.0 while penalizing unstable scores.
 
-# In[ ]:
+# In[5]:
 
 
 def find_top_treatments(
@@ -131,22 +131,26 @@ def find_top_treatments(
     Returns:
     --------
     pl.DataFrame
-        Treatments ranked by mean absolute distance from the ideal score (1.0)
-        and lowest score variance, with per-treatment summary statistics.
+        Treatments ranked by a consistency score that combines mean absolute
+        distance from the ideal score (1.0) and variance normalized by that
+        distance, with per-treatment summary statistics.
     """
     required_cols = {"perturbation", "on_score"}
     missing_cols = required_cols - set(replicate_buscar_scores_df.columns)
     if missing_cols:
         raise ValueError(f"Missing required columns: {sorted(missing_cols)}")
 
-    # rank treatments by mean distance from ideal score (1.0), then by variance
+    # Rank treatments by a combined consistency score. Normalizing variance by
+    # score error prevents a treatment with very low mean error but unstable
+    # replicate scores from being ranked above a slightly less accurate but much
+    # more consistent treatment.
     ranked_df = (
         replicate_buscar_scores_df.group_by("perturbation")
         .agg(
             pl.col("on_score").mean().alias("mean_on_score"),
             pl.col("on_score").median().alias("median_on_score"),
-            pl.col("on_score").std().alias("std_on_score"),
-            pl.col("on_score").var().alias("var_on_score"),
+            pl.col("on_score").std().fill_null(0).alias("std_on_score"),
+            pl.col("on_score").var().fill_null(0).alias("var_on_score"),
             pl.col("on_score").min().alias("min_on_score"),
             pl.col("on_score").max().alias("max_on_score"),
             (pl.col("on_score") - 1.0)
@@ -154,42 +158,75 @@ def find_top_treatments(
             .mean()
             .alias("mean_abs_score_error_from_1"),
         )
-        .sort(["mean_abs_score_error_from_1", "var_on_score"])
+        .with_columns(
+            (
+                pl.col("var_on_score") / (pl.col("mean_abs_score_error_from_1") + 1e-12)
+            ).alias("variance_normalized_by_error")
+        )
+        .with_columns(
+            (
+                pl.col("mean_abs_score_error_from_1")
+                + pl.col("variance_normalized_by_error")
+            ).alias("consistency_rank_score")
+        )
+        .sort("consistency_rank_score")
     )
 
     return ranked_df.head(top_treatments)
 
 
-# In[ ]:
+# In[6]:
 
 
-u2os_top_treatments_df = find_top_treatments(u2os_rep_trt_df, top_treatments=3)
-a549_top_treatments_df = find_top_treatments(a549_rep_trt_df, top_treatments=3)
-a549_top_treatments_df
+u2os_ranked_treatments_df = find_top_treatments(
+    u2os_rep_trt_df,
+    top_treatments=u2os_rep_trt_df["perturbation"].n_unique(),
+).with_columns(pl.lit("U2OS").alias("cell_type"))
+a549_ranked_treatments_df = find_top_treatments(
+    a549_rep_trt_df,
+    top_treatments=a549_rep_trt_df["perturbation"].n_unique(),
+).with_columns(pl.lit("A549").alias("cell_type"))
+
+ranked_treatments_df = pl.concat(
+    [u2os_ranked_treatments_df, a549_ranked_treatments_df]
+).select(
+    [
+        "cell_type",
+        "perturbation",
+        "mean_on_score",
+        "median_on_score",
+        "std_on_score",
+        "var_on_score",
+        "mean_abs_score_error_from_1",
+        "variance_normalized_by_error",
+        "consistency_rank_score",
+        "min_on_score",
+        "max_on_score",
+    ]
+)
+u2os_top_treatments_df = u2os_ranked_treatments_df.head(3)
+a549_top_treatments_df = a549_ranked_treatments_df.head(3)
+ranked_treatments_df
 
 
 # ## Running Titration Analysis
 #
 # For each selected treatment, we iteratively reduce the number of pooled perturbed cells in steps of 10% (from 100% retained down to 1%). At each titration level, Buscar scoring is repeated 20 times with different random subsamples to measure how score stability changes with cell count.
 
-# In[ ]:
+# In[7]:
 
 
 # parameters
 rng_seed = 0
 negcon_subsample_fraction = 0.02
 cell_removal_percentages = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99]
-n_buscar_iterations = 20
+n_buscar_iterations = 5
 
-u2os_top_treatments = find_top_treatments(u2os_rep_trt_df, top_treatments=3)[
-    "perturbation"
-].to_list()
-a549_top_treatments = find_top_treatments(a549_rep_trt_df, top_treatments=3)[
-    "perturbation"
-].to_list()
+u2os_top_treatments = u2os_top_treatments_df["perturbation"].to_list()
+a549_top_treatments = a549_top_treatments_df["perturbation"].to_list()
 
 
-# In[ ]:
+# In[8]:
 
 
 # get unique plates for both cell types
@@ -197,11 +234,11 @@ u2os_unique_plates = cpjump1_u2os_df["Metadata_Plate"].unique().to_list()
 a549_unique_plates = cpjump1_a549_df["Metadata_Plate"].unique().to_list()
 
 
-# In[ ]:
+# In[9]:
 
 
-# setting random seed for reproducibility
-np.random.seed(rng_seed)
+# create a standalone random state for reproducible local sampling
+rng = np.random.RandomState(rng_seed)
 
 # mapping of cell types to their profiles and top treatments for titration
 # analysis
@@ -234,7 +271,7 @@ for cell_type, selected_treatments in top_treatments_by_cell_type.items():
         )
 
     # randomly select one plate to serve as the reference plate
-    selected_plate_id = np.random.choice(plate_ids)
+    selected_plate_id = rng.choice(plate_ids)
 
     for treatment in tqdm(
         selected_treatments, desc=f"{cell_type} treatments", unit="treatment"
@@ -275,7 +312,7 @@ for cell_type, selected_treatments in top_treatments_by_cell_type.items():
                 ).sample(
                     fraction=negcon_subsample_fraction,
                     seed=iter_seed,
-                    with_replacement=False,
+                    with_replacement=True,
                 )
 
                 # all perturbed cells from the reference plate (used to define signatures)
@@ -386,7 +423,7 @@ titration_scores_df.write_parquet(
 #
 # Line-dot plots showing how the mean on-Buscar score changes as the number of titrated (pooled) perturbed cells decreases. The shaded band represents ± 1 standard deviation across iterations.
 
-# In[ ]:
+# In[15]:
 
 
 # per-treatment stats at each removal level for both score types
@@ -415,10 +452,35 @@ titration_plot_df = (
     .sort(["cell_type", "perturbation", "cell_removal_percentage"])
 )
 
-# representative tick positions: mean cell count across treatments per removal level
+# Scale each cell-type column to the treatment with the most titrated cells.
+cell_type_max_cells_df = (
+    titration_plot_df.sort(
+        ["cell_type", "mean_n_cells"],
+        descending=[False, True],
+    )
+    .group_by("cell_type", maintain_order=True)
+    .agg(
+        pl.col("perturbation").first().alias("max_cell_treatment"),
+        pl.col("mean_n_cells").first().alias("max_n_cells"),
+    )
+)
+titration_plot_df = titration_plot_df.join(
+    cell_type_max_cells_df, on="cell_type", how="left"
+).with_columns(
+    (pl.col("mean_n_cells") / pl.col("max_n_cells") * 100).alias(
+        "cell_count_pct_of_max"
+    )
+)
+
+# Representative tick labels come only from the treatment with the highest
+# cell count in that cell type, so the 100% tick is the true maximum.
 tick_ref_df = (
-    titration_plot_df.group_by(["cell_type", "cell_removal_percentage", "keep_pct"])
-    .agg(pl.col("mean_n_cells").mean().round(0).cast(pl.Int64).alias("tick_x"))
+    titration_plot_df.filter(pl.col("perturbation") == pl.col("max_cell_treatment"))
+    .group_by(["cell_type", "cell_removal_percentage"])
+    .agg(
+        pl.col("cell_count_pct_of_max").max().alias("tick_x"),
+        pl.col("mean_n_cells").max().cast(pl.Int64).alias("tick_n_cells"),
+    )
     .sort(["cell_type", "cell_removal_percentage"])
 )
 
@@ -451,9 +513,9 @@ for row_idx, (score_col, std_col, score_label) in enumerate(score_types):
         # plot each treatment's mean score across titration levels with ±1 SD band
         for treatment in treatments:
             trt_df = ct_df.filter(pl.col("perturbation") == treatment).sort(
-                "mean_n_cells"
+                "cell_count_pct_of_max"
             )
-            x = trt_df["mean_n_cells"].to_numpy()
+            x = trt_df["cell_count_pct_of_max"].to_numpy()
             y = trt_df[score_col].to_numpy()
             std = trt_df[std_col].to_numpy()
 
@@ -469,11 +531,14 @@ for row_idx, (score_col, std_col, score_label) in enumerate(score_types):
             )
             tick_x = ticks["tick_x"].to_list()
             tick_labels = [
-                f"{n:,}\n({p}%)" for n, p in zip(ticks["tick_x"], ticks["keep_pct"])
+                f"{pct:.0f}%\n({n:,})"
+                for pct, n in zip(ticks["tick_x"], ticks["tick_n_cells"])
             ]
             ax.set_xticks(tick_x)
             ax.set_xticklabels(tick_labels, fontsize=7.5)
-            ax.set_xlabel("Number of titrated cells (% kept)", fontsize=11)
+            ax.set_xlabel("Titrated cells (% of max; mean n)", fontsize=11)
+
+        ax.set_xlim(0, 105)
 
         # dashed reference line at 1.0 (the ideal on-Buscar score)
         ax.axhline(1.0, color="gray", linestyle="--", linewidth=1, alpha=0.6)
@@ -498,3 +563,6 @@ plot_path = titration_results_dir / "cpjump1_compound_titration_scores.png"
 fig.savefig(plot_path, dpi=150, bbox_inches="tight")
 plt.show()
 print(f"Saved: {plot_path}")
+
+
+# In[ ]:
