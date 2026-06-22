@@ -224,3 +224,9 @@ data/
 
 # ignore prototype files
 _*
+
+# ignore submodules
+.gitmodules
+
+# ignore background nohup files
+nohup.out
